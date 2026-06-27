@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>11</LangVersion>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>DynaCall</AssemblyName>
+    <RootNamespace>DynaCall</RootNamespace>
+    <Description>
+      A managed equivalent of DynamicWrapperX — call any exported function
+      from any native DLL at runtime, with memory helpers, callbacks, and
+      inline machine code, without static P/Invoke declarations.
+    </Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Platforms>x86;x64</Platforms>
+    <AssemblyVersion>2.0.0.0</AssemblyVersion>
+    <FileVersion>2.0.0.0</FileVersion>
+  </PropertyGroup>
+
+</Project>
