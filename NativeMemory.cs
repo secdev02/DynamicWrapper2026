@@ -8,8 +8,9 @@ namespace DynaCall;
 /// Thin wrappers around kernel32 memory management routines, plus helpers for
 /// reading, writing, and hex-formatting raw memory blocks.
 /// </summary>
-internal static class NativeMemory
+internal static unsafe class NativeMemory
 {
+    private const string HexChars = "0123456789ABCDEF";
     // ── kernel32 — library loading ────────────────────────────────────────────
 
     [DllImport("kernel32", SetLastError = true, CharSet = CharSet.Ansi, BestFitMapping = false)]
@@ -61,15 +62,14 @@ internal static class NativeMemory
     /// </summary>
     internal static string HexDump(IntPtr address, int byteCount, int bytesPerGroup, int groupsPerLine)
     {
-        var data = new byte[byteCount];
-        Marshal.Copy(address, data, 0, byteCount);
+        var data = (byte*)address.ToPointer();
 
         if (bytesPerGroup <= 0)
         {
             // Plain continuous string — e.g. "4889C848F7EAC3"
             var sb = new StringBuilder(byteCount * 2);
-            foreach (var b in data)
-                sb.Append(b.ToString("X2"));
+            for (var i = 0; i < byteCount; i++)
+                AppendHexByte(sb, data[i]);
             return sb.ToString();
         }
 
@@ -80,7 +80,7 @@ internal static class NativeMemory
 
         for (var i = 0; i < byteCount; i++)
         {
-            result.Append(data[i].ToString("X2"));
+            AppendHexByte(result, data[i]);
             byteInGroup++;
 
             if (byteInGroup >= bytesPerGroup)
@@ -106,6 +106,12 @@ internal static class NativeMemory
         return result.ToString();
     }
 
+    private static void AppendHexByte(StringBuilder sb, byte value)
+    {
+        sb.Append(HexChars[value >> 4]);
+        sb.Append(HexChars[value & 0x0F]);
+    }
+
     // ── NumGet / NumPut helpers ───────────────────────────────────────────────
 
     /// <summary>Reads a typed number from <paramref name="ptr"/>.</summary>
@@ -123,14 +129,8 @@ internal static class NativeMemory
             case "t": return (ushort)Marshal.ReadInt16(ptr);
             case "c": return (sbyte)Marshal.ReadByte(ptr);
             case "b": return Marshal.ReadByte(ptr);
-            case "f":
-                var fb = new byte[4];
-                Marshal.Copy(ptr, fb, 0, 4);
-                return BitConverter.ToSingle(fb, 0);
-            case "d":
-                var db = new byte[8];
-                Marshal.Copy(ptr, db, 0, 8);
-                return BitConverter.ToDouble(db, 0);
+            case "f": return *(float*)ptr.ToPointer();
+            case "d": return *(double*)ptr.ToPointer();
             default: return Marshal.ReadInt32(ptr);
         }
     }
@@ -172,12 +172,10 @@ internal static class NativeMemory
                 Marshal.WriteByte(ptr, Convert.ToByte(value));
                 return IntPtr.Add(ptr, 1);
             case "f":
-                var fb = BitConverter.GetBytes(Convert.ToSingle(value));
-                Marshal.Copy(fb, 0, ptr, 4);
+                *(float*)ptr.ToPointer() = Convert.ToSingle(value);
                 return IntPtr.Add(ptr, 4);
             case "d":
-                var db = BitConverter.GetBytes(Convert.ToDouble(value));
-                Marshal.Copy(db, 0, ptr, 8);
+                *(double*)ptr.ToPointer() = Convert.ToDouble(value);
                 return IntPtr.Add(ptr, 8);
             default:
                 Marshal.WriteInt32(ptr, Convert.ToInt32(value));

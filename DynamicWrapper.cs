@@ -46,6 +46,8 @@ public sealed class DynamicWrapper : IDynamicWrapper, IDisposable
 
     private readonly List<Delegate> _callbacks  = new List<Delegate>();
     private readonly List<IntPtr>   _codeBlocks = new List<IntPtr>();
+    private static readonly System.Version s_version =
+        typeof(DynamicWrapper).Assembly.GetName().Version ?? new System.Version(2, 0, 0, 0);
 
     private bool _disposed;
 
@@ -243,10 +245,21 @@ public sealed class DynamicWrapper : IDynamicWrapper, IDisposable
     {
         ThrowIfDisposed();
 
-        var reg    = GetRegistration(functionName);
-        var args   = CollectArgs(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11);
-        var coerced = CoerceArgs(args, reg.ParameterSpecs);
-        return reg.BoundDelegate.DynamicInvoke(coerced)!;
+        var reg  = GetRegistration(functionName);
+        var args = new object?[] { a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11 };
+
+        var count = 0;
+        while (count < args.Length && !IsMissing(args[count]))
+            count++;
+
+        if (count != args.Length)
+            Array.Resize(ref args, count);
+
+        var specs = reg.ParameterSpecs;
+        for (var i = 0; i < args.Length && i < specs.Length; i++)
+            args[i] = CoerceArg(args[i], specs[i].ClrType);
+
+        return reg.BoundDelegate.DynamicInvoke(args)!;
     }
 
     // ── Delegate access (managed callers only) ────────────────────────────────
@@ -407,8 +420,7 @@ public sealed class DynamicWrapper : IDynamicWrapper, IDisposable
     /// </param>
     public object Version([Optional] object field)
     {
-        var v = typeof(DynamicWrapper).Assembly.GetName().Version
-                ?? new System.Version(2, 0, 0, 0);
+        var v = s_version;
         switch (CoerceInt(field))
         {
             case 1: return v.Major;
@@ -524,35 +536,15 @@ public sealed class DynamicWrapper : IDynamicWrapper, IDisposable
 
     // ── Private — argument helpers ────────────────────────────────────────────
 
-    private static object?[] CollectArgs(
-        object? a0, object? a1, object? a2, object? a3,
-        object? a4, object? a5, object? a6, object? a7,
-        object? a8, object? a9, object? a10, object? a11)
-    {
-        var all    = new[] { a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11 };
-        var result = new List<object?>(12);
-        foreach (var a in all)
-        {
-            if (a is Missing || a == Type.Missing) break;
-            result.Add(a);
-        }
-        return result.ToArray();
-    }
+    private static bool IsMissing(object? value)
+        => value is Missing || value == Type.Missing;
 
     /// <summary>
-    /// Coerces each collected argument to the CLR type the registered delegate expects.
+    /// Coerces a collected argument to the CLR type the registered delegate expects.
     /// Necessary because JScript sends all integers as VT_I4 (Int32) regardless of the
     /// target type — IntPtr in particular has no implicit conversion from Int32 through
     /// reflection, causing DynamicInvoke to throw without this step.
     /// </summary>
-    private static object?[] CoerceArgs(object?[] args, ArgSpec[] specs)
-    {
-        var result = new object?[args.Length];
-        for (var i = 0; i < args.Length; i++)
-            result[i] = i < specs.Length ? CoerceArg(args[i], specs[i].ClrType) : args[i];
-        return result;
-    }
-
     private static object? CoerceArg(object? value, Type target)
     {
         if (value == null)                            return null;

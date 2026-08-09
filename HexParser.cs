@@ -39,7 +39,10 @@ internal static class HexParser
 
         var result = new byte[digits.Length / 2];
         for (var i = 0; i < result.Length; i++)
-            result[i] = Convert.ToByte(digits.Substring(i * 2, 2), 16);
+        {
+            var offset = i * 2;
+            result[i] = (byte)((HexValue(digits[offset]) << 4) | HexValue(digits[offset + 1]));
+        }
 
         return result;
     }
@@ -97,4 +100,9 @@ internal static class HexParser
         => (c >= '0' && c <= '9') ||
            (c >= 'a' && c <= 'f') ||
            (c >= 'A' && c <= 'F');
+
+    private static int HexValue(char c)
+        => c <= '9' ? c - '0'
+         : c <= 'F' ? c - 'A' + 10
+                    : c - 'a' + 10;
 }

@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace DynaCall;
 
@@ -13,6 +15,10 @@ namespace DynaCall;
 internal static class DelegateBuilder
 {
     private static readonly ModuleBuilder s_module = CreateDynamicModule();
+    private static readonly Dictionary<string, Type> s_typeCache =
+        new Dictionary<string, Type>(StringComparer.Ordinal);
+    private static readonly object s_cacheLock = new object();
+    private static int s_nextTypeId;
 
     private static ModuleBuilder CreateDynamicModule()
     {
@@ -42,20 +48,55 @@ internal static class DelegateBuilder
         CallingConvention convention,
         bool              captureLastError = false)
     {
-        var typeName    = "Fn_" + Sanitize(functionName) + "_" + Guid.NewGuid().ToString("N");
-        var typeBuilder = s_module.DefineType(
-            typeName,
-            TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.AutoClass,
-            typeof(MulticastDelegate));
+        var cacheKey = BuildCacheKey(paramSpecs, returnSpec, convention, captureLastError);
 
-        ApplyUnmanagedFunctionPointerAttr(typeBuilder, convention, captureLastError);
-        EmitDelegateConstructor(typeBuilder);
-        EmitInvokeMethod(typeBuilder, paramSpecs, returnSpec);
+        lock (s_cacheLock)
+        {
+            if (s_typeCache.TryGetValue(cacheKey, out var cached))
+                return cached;
 
-        return typeBuilder.CreateType()!;
+            var typeName = "Fn_" + Sanitize(functionName) + "_" + (++s_nextTypeId).ToString();
+            var typeBuilder = s_module.DefineType(
+                typeName,
+                TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.AutoClass,
+                typeof(MulticastDelegate));
+
+            ApplyUnmanagedFunctionPointerAttr(typeBuilder, convention, captureLastError);
+            EmitDelegateConstructor(typeBuilder);
+            EmitInvokeMethod(typeBuilder, paramSpecs, returnSpec);
+
+            var created = typeBuilder.CreateType()!;
+            s_typeCache.Add(cacheKey, created);
+            return created;
+        }
     }
 
     // ── Private — type construction ───────────────────────────────────────────
+
+    private static string BuildCacheKey(
+        ArgSpec[] paramSpecs,
+        ArgSpec returnSpec,
+        CallingConvention convention,
+        bool captureLastError)
+    {
+        var sb = new StringBuilder(96);
+        sb.Append((int)convention).Append('|')
+          .Append(captureLastError ? '1' : '0').Append('|');
+
+        AppendSpecKey(sb, returnSpec);
+        for (var i = 0; i < paramSpecs.Length; i++)
+            AppendSpecKey(sb, paramSpecs[i]);
+
+        return sb.ToString();
+    }
+
+    private static void AppendSpecKey(StringBuilder sb, ArgSpec spec)
+    {
+        sb.Append(spec.ClrType.AssemblyQualifiedName)
+          .Append(':')
+          .Append(spec.MarshalAs.HasValue ? ((int)spec.MarshalAs.Value).ToString() : "-")
+          .Append(';');
+    }
 
     private static void ApplyUnmanagedFunctionPointerAttr(
         TypeBuilder        tb,
