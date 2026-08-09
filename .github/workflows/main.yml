@@ -1,0 +1,110 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build net48 ${{ matrix.platform }}
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - x86
+          - x64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore DynaCall.csproj
+
+      - name: Build Release
+        shell: pwsh
+        run: |
+          $outDir = Join-Path $env:GITHUB_WORKSPACE "out\${{ matrix.platform }}"
+          dotnet build DynaCall.csproj `
+            --configuration Release `
+            --no-restore `
+            --output $outDir `
+            -p:Platform=${{ matrix.platform }} `
+            -p:PlatformTarget=${{ matrix.platform }} `
+            -p:ContinuousIntegrationBuild=true
+
+      - name: Verify architecture and stage release DLL
+        shell: pwsh
+        run: |
+          $platform = '${{ matrix.platform }}'
+          $dll = Join-Path $env:GITHUB_WORKSPACE "out\$platform\DynaCall.dll"
+
+          if (-not (Test-Path $dll)) {
+            throw "Build output not found: $dll"
+          }
+
+          $bytes = [System.IO.File]::ReadAllBytes($dll)
+          if ($bytes.Length -lt 64) {
+            throw "Invalid PE file: $dll"
+          }
+
+          $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+          $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          $expected = if ($platform -eq 'x86') { 0x014C } else { 0x8664 }
+
+          if ($machine -ne $expected) {
+            throw ('Architecture mismatch for {0}: expected 0x{1:X4}, got 0x{2:X4}' -f $platform, $expected, $machine)
+          }
+
+          $releaseDir = Join-Path $env:GITHUB_WORKSPACE 'release'
+          New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+
+          $assetName = "DynaCall-net48-win-$platform.dll"
+          Copy-Item $dll (Join-Path $releaseDir $assetName)
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.platform }}
+          path: release/DynaCall-net48-win-${{ matrix.platform }}.dll
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release DLLs
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: release-assets/*.dll
+          generate_release_notes: true
+          fail_on_unmatched_files: true
